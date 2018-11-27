@@ -43,9 +43,9 @@ class MSL(object):
     session = requests.session()
     rndm = random.SystemRandom()
     tokens = []
-    base_url = 'http://www.netflix.com/api/msl/NFCDCH-LX/cadmium/'
+    base_url = 'https://www.netflix.com/nq/msl_v1/cadmium/'
     endpoints = {
-        'manifest': base_url + 'manifest',
+        'manifest': base_url + 'pbo_manifests/%5E1.0.0/router',
         'license': base_url + 'license'
     }
 
@@ -65,7 +65,7 @@ class MSL(object):
           self.crypto.fromDict(None)
           self.__perform_key_handshake()
 
-    def load_manifest(self, viewable_id, dolby, hevc, hdr, dolbyvision):
+    def load_manifest(self, viewable_id, dolby, hevc, hdr, dolbyvision, vp9):
         """
         Loads the manifets for the given viewable_id and
         returns a mpd-XML-Manifest
@@ -121,7 +121,7 @@ class MSL(object):
 
         # add hevc profiles if setting is set
         if hevc is True:
-            hevc = 'hevc-main-'
+            main = 'hevc-main-'
             main10 = 'hevc-main10-'
             prk = 'dash-cenc-prk'
             cenc = 'dash-cenc'
@@ -129,12 +129,12 @@ class MSL(object):
             profiles.append(main10 + 'L41-' + cenc)
             profiles.append(main10 + 'L50-' + cenc)
             profiles.append(main10 + 'L51-' + cenc)
-            profiles.append(hevc + 'L30-' + cenc)
-            profiles.append(hevc + 'L31-' + cenc)
-            profiles.append(hevc + 'L40-' + cenc)
-            profiles.append(hevc + 'L41-' + cenc)
-            profiles.append(hevc + 'L50-' + cenc)
-            profiles.append(hevc + 'L51-' + cenc)
+            profiles.append(main + 'L30-' + cenc)
+            profiles.append(main + 'L31-' + cenc)
+            profiles.append(main + 'L40-' + cenc)
+            profiles.append(main + 'L41-' + cenc)
+            profiles.append(main + 'L50-' + cenc)
+            profiles.append(main + 'L51-' + cenc)
             profiles.append(main10 + 'L30-' + cenc)
             profiles.append(main10 + 'L31-' + cenc)
             profiles.append(main10 + 'L40-' + cenc)
@@ -145,10 +145,10 @@ class MSL(object):
             profiles.append(main10 + 'L31-' + prk)
             profiles.append(main10 + 'L40-' + prk)
             profiles.append(main10 + 'L41-' + prk)
-            profiles.append(hevc + 'L30-L31-' + ctl)
-            profiles.append(hevc + 'L31-L40-' + ctl)
-            profiles.append(hevc + 'L40-L41-' + ctl)
-            profiles.append(hevc + 'L50-L51-' + ctl)
+            profiles.append(main + 'L30-L31-' + ctl)
+            profiles.append(main + 'L31-L40-' + ctl)
+            profiles.append(main + 'L40-L41-' + ctl)
+            profiles.append(main + 'L50-L51-' + ctl)
             profiles.append(main10 + 'L30-L31-' + ctl)
             profiles.append(main10 + 'L31-L40-' + ctl)
             profiles.append(main10 + 'L40-L41-' + ctl)
@@ -185,6 +185,10 @@ class MSL(object):
                 profiles.append(dv5 + 'L41-' + prk)
                 profiles.append(dv5 + 'L50-' + prk)
                 profiles.append(dv5 + 'L51-' + prk)
+
+        if hevc is False or vp9 is True:
+            profiles.append('vp9-profile0-L30-dash-cenc')
+            profiles.append('vp9-profile0-L31-dash-cenc')
 
         # Check if dolby sound is enabled and add to profles
         if dolby:
