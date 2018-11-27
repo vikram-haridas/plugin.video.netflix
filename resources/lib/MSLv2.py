@@ -300,9 +300,7 @@ class MSL(object):
                 data = base64.standard_b64decode(data)
             decrypted_payload += data
 
-        decrypted_payload = json.JSONDecoder().decode(decrypted_payload)[1]['payload']['data']
-        decrypted_payload = base64.standard_b64decode(decrypted_payload)
-        return json.JSONDecoder().decode(decrypted_payload)
+        return json.JSONDecoder().decode(decrypted_payload)[1]['payload']['json']['result']
 
     def __tranform_to_dash(self, manifest):
 
@@ -310,23 +308,11 @@ class MSL(object):
             data_path=self.nx_common.data_path,
             filename='manifest.json',
             content=json.dumps(manifest))
-        manifest = manifest['result']['viewables'][0]
 
         self.last_playback_context = manifest['playbackContextId']
         self.last_drm_context = manifest['drmContextId']
 
-        # Check for pssh
-        pssh = ''
-        keyid = None
-        if 'psshb64' in manifest:
-            if len(manifest['psshb64']) >= 1:
-                pssh = manifest['psshb64'][0]
-                psshbytes = base64.standard_b64decode(pssh)
-                if len(psshbytes) == 52:
-                    keyid = psshbytes[36:]
-
-        seconds = manifest['runtime']/1000
-        init_length = seconds / 2 * 12 + 20*1000
+        seconds = manifest['duration']/1000
         duration = "PT"+str(seconds)+".00S"
 
         root = ET.Element('MPD')
@@ -337,7 +323,7 @@ class MSL(object):
         period = ET.SubElement(root, 'Period', start='PT0S', duration=duration)
 
         # One Adaption Set for Video
-        for video_track in manifest['videoTracks']:
+        for video_track in manifest['video_tracks']:
             video_adaption_set = ET.SubElement(
                 parent=period,
                 tag='AdaptationSet',
@@ -345,13 +331,19 @@ class MSL(object):
                 contentType="video")
 
             # Content Protection
+            keyid = None
+            pssh = None
+            if 'drmHeader' in video_track:
+                keyid = video_track['drmHeader']['keyId']
+                pssh = video_track['drmHeader']['bytes']
+
             if keyid:
                 protection = ET.SubElement(
                     parent=video_adaption_set,
                     tag='ContentProtection',
                     value='cenc',
                     schemeIdUri='urn:mpeg:dash:mp4protection:2011')
-                protection.set('cenc:default_KID', str(uuid.UUID(bytes=keyid)))
+                protection.set('cenc:default_KID', str(uuid.UUID(bytes=base64.standard_b64decode(keyid))))
 
             protection = ET.SubElement(
                 parent=video_adaption_set,
@@ -363,124 +355,46 @@ class MSL(object):
                 tag='widevine:license',
                 robustness_level='HW_SECURE_CODECS_REQUIRED')
 
-            if pssh is not '':
+            if pssh:
                 ET.SubElement(protection, 'cenc:pssh').text = pssh
 
-            for downloadable in video_track['downloadables']:
+            for stream in video_track['streams']:
 
                 codec = 'h264'
-                if 'hevc' in downloadable['contentProfile']:
+                if 'hevc' in stream['content_profile']:
                     codec = 'hevc'
+                elif stream['content_profile'] == 'vp9-profile0-L30-dash-cenc':
+                    codec = 'vp9.0.30'
+                elif stream['content_profile'] == 'vp9-profile0-L31-dash-cenc':
+                    codec = 'vp9.0.31'
 
                 hdcp_versions = '0.0'
-                for hdcp in downloadable['hdcpVersions']:
-                    if hdcp != 'none':
-                        hdcp_versions = hdcp
+                #for hdcp in stream['hdcpVersions']:
+                #    if hdcp != 'none':
+                #        hdcp_versions = hdcp if hdcp != 'any' else '1.0'
 
                 rep = ET.SubElement(
                     parent=video_adaption_set,
                     tag='Representation',
-                    width=str(downloadable['width']),
-                    height=str(downloadable['height']),
-                    bandwidth=str(downloadable['bitrate']*1024),
+                    width=str(stream['res_w']),
+                    height=str(stream['res_h']),
+                    bandwidth=str(stream['bitrate']*1024),
+                    frameRate='%d/%d' % (stream['framerate_value'], stream['framerate_scale']),
                     hdcp=hdcp_versions,
-                    nflxContentProfile=str(downloadable['contentProfile']),
+                    nflxContentProfile=str(stream['content_profile']),
                     codecs=codec,
                     mimeType='video/mp4')
 
                 # BaseURL
-                base_url = self.__get_base_url(downloadable['urls'])
+                base_url = self.__get_base_url(stream['urls'])
                 ET.SubElement(rep, 'BaseURL').text = base_url
                 # Init an Segment block
+                sidx = stream['sidx']
                 segment_base = ET.SubElement(
                     parent=rep,
                     tag='SegmentBase',
-                    indexRange='0-' + str(init_length),
+                    indexRange='0-' + str(sidx['offset'] + sidx['size']),
                     indexRangeExact='true')
-
-        # Multiple Adaption Set for audio
-        language = None
-        for audio_track in manifest['audioTracks']:
-            impaired = 'false'
-            original = 'false'
-            default = 'false'
-
-            if audio_track.get('trackType') == 'ASSISTIVE':
-                impaired = 'true'
-            elif not language or language == audio_track.get('language'):
-                language = audio_track.get('language')
-                default = 'true'
-            if audio_track.get('language').find('[') > 0:
-                original = 'true'
-
-            audio_adaption_set = ET.SubElement(
-                parent=period,
-                tag='AdaptationSet',
-                lang=audio_track['bcp47'],
-                contentType='audio',
-                mimeType='audio/mp4',
-                impaired=impaired,
-                original=original,
-                default=default)
-            for downloadable in audio_track['downloadables']:
-                codec = 'aac'
-                #self.nx_common.log(msg=downloadable)
-                is_dplus2 = downloadable['contentProfile'] == 'ddplus-2.0-dash'
-                is_dplus5 = downloadable['contentProfile'] == 'ddplus-5.1-dash'
-                if is_dplus2 or is_dplus5:
-                    codec = 'ec-3'
-                #self.nx_common.log(msg='codec is: ' + codec)
-                rep = ET.SubElement(
-                    parent=audio_adaption_set,
-                    tag='Representation',
-                    codecs=codec,
-                    bandwidth=str(downloadable['bitrate']*1024),
-                    mimeType='audio/mp4')
-
-                # AudioChannel Config
-                uri = 'urn:mpeg:dash:23003:3:audio_channel_configuration:2011'
-                ET.SubElement(
-                    parent=rep,
-                    tag='AudioChannelConfiguration',
-                    schemeIdUri=uri,
-                    value=str(audio_track.get('channelsCount')))
-
-                # BaseURL
-                base_url = self.__get_base_url(downloadable['urls'])
-                ET.SubElement(rep, 'BaseURL').text = base_url
-                # Index range
-                segment_base = ET.SubElement(
-                    parent=rep,
-                    tag='SegmentBase',
-                    indexRange='0-' + str(init_length),
-                    indexRangeExact='true')
-
-        # Multiple Adaption Sets for subtiles
-        for text_track in manifest.get('textTracks'):
-            is_downloadables = 'downloadables' not in text_track
-            if is_downloadables or text_track.get('downloadables') is None:
-                continue
-            # Only one subtitle representation per adaptationset
-            downloadable = text_track['downloadables'][0]
-
-            subtiles_adaption_set = ET.SubElement(
-                parent=period,
-                tag='AdaptationSet',
-                lang=text_track.get('bcp47'),
-                codecs='wvtt' if downloadable.get('contentProfile') == 'webvtt-lssdh-ios8' else 'stpp',
-                contentType='text',
-                mimeType='text/vtt' if downloadable.get('contentProfile') == 'webvtt-lssdh-ios8' else 'application/ttml+xml')
-            role = ET.SubElement(
-                parent=subtiles_adaption_set,
-                tag = 'Role',
-                schemeIdUri = 'urn:mpeg:dash:role:2011',
-                value = 'forced' if text_track.get('isForced') == True else 'main')
-            rep = ET.SubElement(
-                parent=subtiles_adaption_set,
-                tag='Representation',
-                nflxProfile=downloadable.get('contentProfile'))
-            base_url = self.__get_base_url(downloadable['urls'])
-            ET.SubElement(rep, 'BaseURL').text = base_url
 
         xml = ET.tostring(root, encoding='utf-8', method='xml')
         xml = xml.replace('\n', '').replace('\r', '')
@@ -493,8 +407,8 @@ class MSL(object):
         return xml
 
     def __get_base_url(self, urls):
-        for key in urls:
-            return urls[key]
+        for url in urls:
+            return url['url']
 
     def __parse_chunked_msl_response(self, message):
         header = message.split('}}')[0] + '}}'
