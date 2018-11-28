@@ -37,8 +37,7 @@ else:
 class MSL(object):
     # Is a handshake already performed and the keys loaded
     handshake_performed = False
-    last_drm_context = ''
-    last_playback_context = ''
+    last_license_url = ''
     current_message_id = 0
     session = requests.session()
     rndm = random.SystemRandom()
@@ -46,7 +45,7 @@ class MSL(object):
     base_url = 'https://www.netflix.com/nq/msl_v1/cadmium/'
     endpoints = {
         'manifest': base_url + 'pbo_manifests/%5E1.0.0/router',
-        'license': base_url + 'license'
+        'license': base_url + 'pbo_licenses/%5E1.0.0/router'
     }
 
     def __init__(self, nx_common):
@@ -114,7 +113,7 @@ class MSL(object):
 
         # subtitles
         addon = xbmcaddon.Addon('inputstream.adaptive')
-        if addon and addon.getAddonInfo('version') >= '2.3.8':
+        if addon and self.nx_common.compare_versions(map(int, addon.getAddonInfo('version').split('.')), [2, 3, 8]):
             profiles.append('webvtt-lssdh-ios8')
         else:
             profiles.append('simplesdh')
@@ -234,22 +233,26 @@ class MSL(object):
         :param sid: The sid paired to the challengew
         :return: Base64 representation of the licensekey or False unsuccessfull
         """
+        esn = self.nx_common.get_esn()
+        id = int(time.time() * 10000)
         license_request_data = {
-            'method': 'license',
-            'licenseType': 'STANDARD',
-            'clientVersion': '4.0004.899.011',
-            'uiVersion': 'akira',
-            'languages': ['de-DE'],
-            'playbackContextId': self.last_playback_context,
-            'drmContextIds': [self.last_drm_context],
-            'challenges': [{
-                'dataBase64': challenge,
-                'sessionId': sid
+            'version': 2,
+            'url': self.last_license_url,
+            'id': id,
+            'esn': esn,
+            'languages': ['de-US'],
+            'uiVersion': 'shakti-v25d2fa21',
+            'clientVersion': '6.0011.511.011',
+            'params': [{
+                'sessionId': sid,
+                'clientTime': int(id / 10000),
+                'challengeBase64': challenge,
+                'xid': str(id + 1610)
             }],
-            'clientTime': int(time.time()),
-            'xid': int((int(time.time()) + 0.1612) * 1000)
-
+            'echo': 'sessionId'
         }
+        #print license_request_data
+
         request_data = self.__generate_msl_request_data(license_request_data)
 
         try:
@@ -259,6 +262,8 @@ class MSL(object):
             exc = sys.exc_info()
             self.nx_common.log(
                 msg='[MSL][POST] Error {} {}'.format(exc[0], exc[1]))
+
+        print resp
 
         if resp:
             try:
@@ -300,6 +305,8 @@ class MSL(object):
                 data = base64.standard_b64decode(data)
             decrypted_payload += data
 
+        #print decrypted_payload
+
         return json.JSONDecoder().decode(decrypted_payload)[1]['payload']['json']['result']
 
     def __tranform_to_dash(self, manifest):
@@ -309,8 +316,7 @@ class MSL(object):
             filename='manifest.json',
             content=json.dumps(manifest))
 
-        self.last_playback_context = manifest['playbackContextId']
-        self.last_drm_context = manifest['drmContextId']
+        self.last_license_url = manifest['links']['ldl']['href']
 
         seconds = manifest['duration']/1000
         duration = "PT"+str(seconds)+".00S"
@@ -389,11 +395,16 @@ class MSL(object):
                 base_url = self.__get_base_url(stream['urls'])
                 ET.SubElement(rep, 'BaseURL').text = base_url
                 # Init an Segment block
-                sidx = stream['sidx']
+                if 'startByteOffset' in stream:
+                    initSize = stream['startByteOffset']
+                else:
+                    sidx = stream['sidx']
+                    initSize = sidx['offset'] + sidx['size']
+
                 segment_base = ET.SubElement(
                     parent=rep,
                     tag='SegmentBase',
-                    indexRange='0-' + str(sidx['offset'] + sidx['size']),
+                    indexRange='0-' + str(initSize),
                     indexRangeExact='true')
 
         xml = ET.tostring(root, encoding='utf-8', method='xml')
