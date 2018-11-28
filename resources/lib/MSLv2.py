@@ -345,8 +345,9 @@ class MSL(object):
         self.last_playback_context = manifest['playbackContextId']
         self.last_drm_context = manifest['drmContextId']
 
-        seconds = manifest['duration']/1000
-        duration = "PT"+str(seconds)+".00S"
+        seconds = manifest['duration'] / 1000
+        init_length = seconds / 2 * 12 + 20 * 1000
+        duration = "PT" + str(seconds) + ".00S"
 
         root = ET.Element('MPD')
         root.attrib['xmlns'] = 'urn:mpeg:dash:schema:mpd:2011'
@@ -432,6 +433,57 @@ class MSL(object):
                     parent=rep,
                     tag='SegmentBase',
                     indexRange='0-' + str(initSize),
+                    indexRangeExact='true')
+
+        # Multiple Adaption Set for audio
+        languageMap = {}
+        channelCount = {'1.0':'1', '2.0':'2', '5.1':'6', '7.1':'8'}
+
+        for audio_track in manifest['audio_tracks']:
+            impaired = 'true' if audio_track['trackType'] == 'ASSISTIVE' else 'false'
+            original = 'true' if audio_track['isNative'] else 'false'
+            default = 'false' if audio_track['language'] in languageMap else 'true'
+            languageMap[audio_track['language']] = True
+
+            audio_adaption_set = ET.SubElement(
+                parent=period,
+                tag='AdaptationSet',
+                lang=audio_track['language'],
+                contentType='audio',
+                mimeType='audio/mp4',
+                impaired=impaired,
+                original=original,
+                default=default)
+            for stream in audio_track['streams']:
+                codec = 'aac'
+                #self.nx_common.log(msg=stream)
+                is_dplus2 = stream['content_profile'] == 'ddplus-2.0-dash'
+                is_dplus5 = stream['content_profile'] == 'ddplus-5.1-dash'
+                if is_dplus2 or is_dplus5:
+                    codec = 'ec-3'
+                #self.nx_common.log(msg='codec is: ' + codec)
+                rep = ET.SubElement(
+                    parent=audio_adaption_set,
+                    tag='Representation',
+                    codecs=codec,
+                    bandwidth=str(stream['bitrate']*1024),
+                    mimeType='audio/mp4')
+
+                # AudioChannel Config
+                ET.SubElement(
+                    parent=rep,
+                    tag='AudioChannelConfiguration',
+                    schemeIdUri='urn:mpeg:dash:23003:3:audio_channel_configuration:2011',
+                    value=channelCount[stream['channels']])
+
+                # BaseURL
+                base_url = self.__get_base_url(stream['urls'])
+                ET.SubElement(rep, 'BaseURL').text = base_url
+                # Index range
+                segment_base = ET.SubElement(
+                    parent=rep,
+                    tag='SegmentBase',
+                    indexRange='0-' + str(init_length),
                     indexRangeExact='true')
 
         xml = ET.tostring(root, encoding='utf-8', method='xml')
