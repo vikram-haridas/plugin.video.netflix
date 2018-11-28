@@ -27,7 +27,7 @@ try:
     sdkversion = int(subprocess.check_output(
         ['/system/bin/getprop', 'ro.build.version.sdk']))
 except:
-    sdkversion = 0 
+    sdkversion = 0
 
 if sdkversion >= 18:
   from MSLMediaDrm import MSLMediaDrmCrypto as MSLHandler
@@ -38,6 +38,9 @@ class MSL(object):
     # Is a handshake already performed and the keys loaded
     handshake_performed = False
     last_license_url = ''
+    last_drm_context = ''
+    last_playback_context = ''
+
     current_message_id = 0
     session = requests.session()
     rndm = random.SystemRandom()
@@ -45,7 +48,8 @@ class MSL(object):
     base_url = 'https://www.netflix.com/nq/msl_v1/cadmium/'
     endpoints = {
         'manifest': base_url + 'pbo_manifests/%5E1.0.0/router',
-        'license': base_url + 'pbo_licenses/%5E1.0.0/router'
+        #'license': base_url + 'pbo_licenses/%5E1.0.0/router'
+        'license': 'http://www.netflix.com/api/msl/NFCDCH-LX/cadmium/license'
     }
 
     def __init__(self, nx_common):
@@ -108,7 +112,7 @@ class MSL(object):
             }
         }
         manifest_request_data['params']['titleSpecificData'][viewable_id] = { 'unletterboxed': False }
-        
+
         profiles = ['playready-h264mpl30-dash', 'playready-h264mpl31-dash', 'playready-h264hpl30-dash', 'playready-h264hpl31-dash', 'heaac-2-dash', 'BIF240', 'BIF320']
 
         # subtitles
@@ -235,7 +239,7 @@ class MSL(object):
         """
         esn = self.nx_common.get_esn()
         id = int(time.time() * 10000)
-        license_request_data = {
+        '''license_request_data = {
             'version': 2,
             'url': self.last_license_url,
             'id': id,
@@ -250,7 +254,24 @@ class MSL(object):
                 'xid': str(id + 1610)
             }],
             'echo': 'sessionId'
+        }'''
+
+        license_request_data = {
+            'method': 'license',
+            'licenseType': 'STANDARD',
+            'clientVersion': '4.0004.899.011',
+            'uiVersion': 'akira',
+            'languages': ['de-DE'],
+            'playbackContextId': self.last_playback_context,
+            'drmContextIds': [self.last_drm_context],
+            'challenges': [{
+                'dataBase64': challenge,
+                'sessionId': sid
+            }],
+            'clientTime': int(id / 10000),
+            'xid': id + 1610
         }
+
         #print license_request_data
 
         request_data = self.__generate_msl_request_data(license_request_data)
@@ -305,9 +326,13 @@ class MSL(object):
                 data = base64.standard_b64decode(data)
             decrypted_payload += data
 
-        #print decrypted_payload
+        decrypted_payload = json.JSONDecoder().decode(decrypted_payload)[1]['payload']
+        if 'json' in decrypted_payload:
+            return decrypted_payload['json']['result']
+        else:
+            decrypted_payload = base64.standard_b64decode(decrypted_payload['data'])
+            return json.JSONDecoder().decode(decrypted_payload)
 
-        return json.JSONDecoder().decode(decrypted_payload)[1]['payload']['json']['result']
 
     def __tranform_to_dash(self, manifest):
 
@@ -317,6 +342,8 @@ class MSL(object):
             content=json.dumps(manifest))
 
         self.last_license_url = manifest['links']['ldl']['href']
+        self.last_playback_context = manifest['playbackContextId']
+        self.last_drm_context = manifest['drmContextId']
 
         seconds = manifest['duration']/1000
         duration = "PT"+str(seconds)+".00S"
