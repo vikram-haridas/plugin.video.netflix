@@ -486,6 +486,35 @@ class MSL(object):
                     indexRange='0-' + str(init_length),
                     indexRangeExact='true')
 
+
+        # Multiple Adaption Sets for subtiles
+        for text_track in manifest.get('timedtexttracks'):
+            if text_track['isNoneTrack']:
+                continue
+            # Only one subtitle representation per adaptationset
+            downloadable = text_track['ttDownloadables']
+            content_profile = downloadable.keys()[0]
+
+            subtiles_adaption_set = ET.SubElement(
+                parent=period,
+                tag='AdaptationSet',
+                lang=text_track.get('language'),
+                codecs='wvtt' if content_profile == 'webvtt-lssdh-ios8' else 'stpp',
+                contentType='text',
+                mimeType='text/vtt' if content_profile == 'webvtt-lssdh-ios8' else 'application/ttml+xml')
+            role = ET.SubElement(
+                parent=subtiles_adaption_set,
+                tag = 'Role',
+                schemeIdUri = 'urn:mpeg:dash:role:2011',
+                value = 'forced' if text_track.get('isForcedNarrative') else 'main')
+            rep = ET.SubElement(
+                parent=subtiles_adaption_set,
+                tag='Representation',
+                nflxProfile=content_profile)
+
+            base_url = downloadable[content_profile]['downloadUrls'].values()[0]
+            ET.SubElement(rep, 'BaseURL').text = base_url
+
         xml = ET.tostring(root, encoding='utf-8', method='xml')
         xml = xml.replace('\n', '').replace('\r', '')
 
